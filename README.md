@@ -50,6 +50,7 @@ python/
 ├── iterators.py            # Custom iteration protocols
 ├── log.py                  # Centralized Borg-pattern logging system (Rich)
 ├── multiprocessing.py      # True parallelism with shared C-arrays
+├── path.py                 # Path library
 └── state_machine.py        # Asynchronous/Synchronous Finite State Machine (FSM)
 
 ```

@@ -1,4 +1,4 @@
-exemples/
+examples/
 .mypy_cache/
 __pycache__/
 .venv_path
