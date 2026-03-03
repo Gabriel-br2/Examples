@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict
 
 class EnvConfigManager:
-    """Manages an environment variables (.env) file with automatic backups."""
+    """Manages an environment variables (.env) file."""
     
     def __init__(self, filepath: str, default_vars: Dict[str, str]):
         self.filepath = Path(filepath)
@@ -26,15 +26,11 @@ class EnvConfigManager:
             for key, value in self.default_vars.items():
                 file.write(f"{key}={value}\n")
 
-    def get_secret(self, key: str) -> str:
-        """Retrieves the secret directly from the loaded OS environment."""
-        return os.getenv(key, "NOT_FOUND")
-
 if __name__ == "__main__":
     # Use empty or dummy strings for defaults. NEVER hardcode real passwords here.
     DEFAULT_SECRETS = {
         "OPENROUTER_API_KEY": "change_me_immediately",
-        "DATABASE_PASSWORD": "change_me_immediately"
+        "DATABASE_PASSWORD":  "change_me_immediately"
     }
 
     env_manager = EnvConfigManager("CONFIG/.env", DEFAULT_SECRETS)
