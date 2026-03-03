@@ -1,4 +1,4 @@
-# 🦾 Advanced Python Architecture for Automation & Embedded Systems
+# 🦾 Architecture for code Automation && better software design
 
 ## 📝 Project Description
 This repository serves as a comprehensive reference architecture and toolkit for advanced  programming, strictly tailored for automation engineering, robotics, and embedded systems. It moves beyond basic scripting to implement robust, enterprise-grade design patterns. The codebase focuses on hardware-safe state machines, dynamic plugin loading, rigorous memory management, and concurrent data processing to bridge the gap between high-level software and physical hardware control.
