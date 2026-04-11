@@ -1,151 +1,101 @@
-import time
+from dataclasses import dataclass, field
+from typing import Callable, Iterable
 from enum import Enum, auto
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Dict, Type, Optional, Any
 
-class Trigger(Enum):
-    """Events that force the machine to change its state."""
-    START_PROCESS = auto()
-    OVERHEAT_DETECTED = auto()
-    COOLING_FINISHED = auto()
-    FINISH_PROCESS = auto()
+type Action[C] = Callable[[C], None]
+
+class InvalidTransition(Exception):
+    pass
+
+@dataclass
+class StateMachine[S: Enum, E: Enum, C]:
+    trassitions: dict[tuple[S, E], tuple[S, Action[C]]] = field(
+        default_factory=dict[tuple[S, E], tuple[S, Action[C]]]
+    )
+
+    def add_transition(self, from_state: S, event: E, to_state: S, func: Action[C]) -> None:
+        self.trassitions[(from_state, event)] = (to_state, func)
+
+    def next_transition(self, state: S, event: E) -> tuple[S, Action[C]]:
+        try:
+            return self.trassitions[(state, event)]
+        except KeyError as e:
+            raise InvalidTransition(f"Cannot {event.name} from {state.name}") from e
+            
+    def handle(self, ctx: C, state: S, event: E) -> S:
+        next_state, action = self.next_transition(state, event)
+        action(ctx)
+        return next_state
+
+    def transiction(self, from_state: S | Iterable[S], event: E, to_state: S) -> Callable[[Action[C]], Action[C]]:
+        if not isinstance(from_state, Iterable):
+            from_state = (from_state,)
+        
+        def decorator(func: Action[C]) -> Action[C]:
+            for s in from_state:
+                self.add_transition(s, event, to_state, func)
+            return func
+        return decorator
+
+#############################################################################
+
+class PayState(Enum):
+    NEW        = auto()
+    AUTHORIZED = auto()
+    CAPTURED   = auto()
+    FAILED     = auto()
+    REFUNDED   = auto()
+
+class PayEvent(Enum):
+    AUTHORIZE = auto()
+    CAPTURE   = auto()
+    FAIL      = auto()
+    REFUND    = auto()
+
+@dataclass
+class PaymentCtx:
+    payment_id: str
+    audit: list[str] = field(default_factory=list[str])
+
+
+pay_sm: StateMachine[PayState, PayEvent, PaymentCtx] = StateMachine()
+
+@pay_sm.transiction(PayState.NEW, PayEvent.AUTHORIZE, PayState.AUTHORIZED)
+def authorize(ctx: PaymentCtx) -> None:
+    ctx.audit.append(f"{ctx.payment_id} authorized")
+
+
+@pay_sm.transiction(PayState.AUTHORIZED, PayEvent.CAPTURE, PayState.CAPTURED)
+def capture(ctx: PaymentCtx) -> None:
+    ctx.audit.append(f"{ctx.payment_id} captured")
+
+
+@pay_sm.transiction((PayState.NEW, PayState.AUTHORIZED, PayState.CAPTURED, PayState.FAILED), PayEvent.FAIL, PayState.FAILED)
+def fail(ctx: PaymentCtx) -> None:
+    ctx.audit.append(f"{ctx.payment_id} failed")
+
+
+@pay_sm.transiction(PayState.CAPTURED, PayEvent.REFUND, PayState.REFUNDED)
+def refund(ctx: PaymentCtx) -> None:
+    ctx.audit.append(f"{ctx.payment_id} refunded") 
 
 
 @dataclass
-class HardwareContext:
-    """The central memory that all states can read and modify."""
-    device_name: str
-    temperature: float = 25.0
-    is_active: bool = False
+class Payment:
+    ctx: PaymentCtx
+    state: PayState = PayState.NEW
 
+    def handle(self, event: PayEvent) -> None:
+        self.state =pay_sm.handle(self.ctx, self.state, event)
 
-class BaseState(ABC):
-    """Contract that forces every state to have these specific methods."""
-    
-    def on_enter(self, context: HardwareContext) -> None:
-        """Called exactly once when the state begins."""
-        pass
+def main() -> None:
+    p = Payment(ctx=PaymentCtx(payment_id="p1"))
+    p.handle(PayEvent.AUTHORIZE)
+    p.handle(PayEvent.CAPTURE)
+    p.handle(PayEvent.REFUND)
 
-    def on_exit(self, context: HardwareContext) -> None:
-        """Called exactly once when the state ends."""
-        pass
-
-    @abstractmethod
-    def execute(self, context: HardwareContext) -> Optional[Trigger]:
-        """Core logic loop. Returns a Trigger to change state, or None to stay."""
-        pass
-
-
-# =========================================================
-# STATES (The Business Logic)
-# =========================================================
-class IdleState(BaseState):
-    def on_enter(self, context: HardwareContext) -> None:
-        print(f"\n[{context.device_name}] Entering IDLE Mode.")
-        context.is_active = False
-
-    def execute(self, context: HardwareContext) -> Optional[Trigger]:
-        print(" -> Waiting for work...")
-        time.sleep(0.5)
-        return Trigger.START_PROCESS
-
-
-class WorkingState(BaseState):
-    def on_enter(self, context: HardwareContext) -> None:
-        print(f"\n[{context.device_name}] Entering WORKING Mode.")
-        context.is_active = True
-
-    def execute(self, context: HardwareContext) -> Optional[Trigger]:
-        context.temperature += 20.0
-        print(f" -> Processing... Temperature rising to {context.temperature}C")
-        time.sleep(0.5)
-        
-        if context.temperature >= 65.0:
-            return Trigger.OVERHEAT_DETECTED
-            
-        return None # Continue working until an overheat or external finish trigger
-
-
-class FaultState(BaseState):
-    def on_enter(self, context: HardwareContext) -> None:
-        print(f"\n[{context.device_name}] ALARM! OVERHEAT DETECTED. Shutting down actuators.")
-        context.is_active = False # Safe state enforced
-
-    def execute(self, context: HardwareContext) -> Optional[Trigger]:
-        context.temperature -= 20.0
-        print(f" -> Cooling down... Current temp: {context.temperature}C")
-        time.sleep(0.5)
-        
-        if context.temperature <= 25.0:
-            return Trigger.COOLING_FINISHED
-            
-        return None
-
-
-# =========================================================
-# 5. THE ORCHESTRATOR (Context Manager + Callable)
-# =========================================================
-class SynchronousStateMachine:
-    """
-    Manages the transitions and the execution loop.
-    Contains NO business logic itself, only routing rules.
-    """
-    def __init__(self, context: HardwareContext):
-        self.context = context
-        self.current_state: BaseState = IdleState()
-        
-        # The routing table: CurrentState -> {Trigger -> NextState}
-        self.transitions: Dict[Type[BaseState], Dict[Trigger, Type[BaseState]]] = {
-            IdleState: {
-                Trigger.START_PROCESS: WorkingState
-            },
-            WorkingState: {
-                Trigger.OVERHEAT_DETECTED: FaultState,
-                Trigger.FINISH_PROCESS: IdleState
-            },
-            FaultState: {
-                Trigger.COOLING_FINISHED: IdleState
-            }
-        }
-
-    def __enter__(self) -> 'SynchronousStateMachine':
-        """Safely boots the hardware when entering the 'with' block."""
-        print("=== SYSTEM BOOT ===")
-        self.current_state.on_enter(self.context)
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Guarantees safe shutdown even if the script crashes."""
-        print("\n=== SYSTEM SHUTDOWN ===")
-        self.current_state.on_exit(self.context)
-        self.context.is_active = False
-        print("[SAFETY] Hardware locked securely.")
-
-    def trigger_transition(self, trigger: Trigger) -> None:
-        """Looks up the routing table and swaps the active state class."""
-        state_class = type(self.current_state)
-        allowed_transitions = self.transitions.get(state_class, {})
-        
-        if trigger in allowed_transitions:
-            next_state_class = allowed_transitions[trigger]
-            
-            self.current_state.on_exit(self.context)
-            self.current_state = next_state_class()
-            self.current_state.on_enter(self.context)
-        else:
-            print(f"[ERROR] Invalid trigger {trigger.name} for {state_class.__name__}")
-
-    def __call__(self, max_ticks: int) -> None:
-        """Executes the machine using the instance as a function."""
-        for _ in range(max_ticks):
-            trigger = self.current_state.execute(self.context)
-            if trigger:
-                self.trigger_transition(trigger)
-
+    print("final state:", p.state)
+    print("audit:", p.ctx.audit)
 
 if __name__ == "__main__":
-    shared_memory = HardwareContext(device_name="ROBOT_ARM_ALPHA")
-    
-    with SynchronousStateMachine(shared_memory) as fsm:        
-        fsm(max_ticks=8)
+    main()
